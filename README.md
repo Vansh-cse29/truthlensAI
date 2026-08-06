@@ -1,0 +1,2 @@
+# truthlensAI
+project for hackathon

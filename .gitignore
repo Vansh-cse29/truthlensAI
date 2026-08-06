@@ -1,0 +1,22 @@
+# Environment files
+.env
+.env.*
+*.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+
+# Build
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
