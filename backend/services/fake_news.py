@@ -1,55 +1,97 @@
 import os
+import json
 import requests
 from transformers import pipeline
 
-# Load local model once at startup
 try:
-    local_classifier = pipeline("text-classification", model="distilbert-base-uncased")
+    local_classifier = pipeline(
+        "text-classification",
+        model="distilbert-base-uncased-finetuned-sst-2-english"
+    )
 except Exception:
     local_classifier = None
 
-def analyze_news_hybrid(text: str, openai_api_key: str = None) -> dict:
+
+def analyze_news_hybrid(
+    text: str,
+    use_cloud: bool = False,
+    openai_api_key: str = None
+) -> dict:
+
     api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
 
-    # 1. TRY ONLINE AI ENGINE FIRST (if API key provided & online)
-    if api_key:
+    # ----------------------------
+    # Cloud AI (Optional)
+    # ----------------------------
+    if use_cloud and api_key:
         try:
             response = requests.post(
                 "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
                 json={
                     "model": "gpt-4o-mini",
                     "messages": [
                         {
                             "role": "system",
-                            "content": "You are an expert fake news analyzer. Respond ONLY in valid JSON with keys: verdict ('REAL NEWS' or 'FAKE NEWS'), confidence (percentage string), and reason (brief explanation)."
+                            "content": (
+                                "You are a fake news detector. "
+                                "Reply ONLY in JSON with keys: "
+                                "verdict, confidence, reason."
+                            ),
                         },
-                        {"role": "user", "content": text}
+                        {
+                            "role": "user",
+                            "content": text,
+                        },
                     ],
-                    "response_format": {"type": "json_object"}
+                    "response_format": {
+                        "type": "json_object"
+                    },
                 },
-                timeout=3  # Fast fallback if internet is lagging
+                timeout=10,
             )
+
             if response.status_code == 200:
-                data = response.json()['choices'][0]['message']['content']
-                import json
-                result = json.loads(data)
+                result = json.loads(
+                    response.json()["choices"][0]["message"]["content"]
+                )
+
                 result["engine"] = "Cloud AI (GPT-4o)"
                 return result
-        except Exception as e:
-            print(f"Online engine failed or offline, switching to local model: {e}")
 
-    # 2. FALLBACK TO LOCAL DISTILBERT MODEL (Zero-Dependency / Offline)
+        except Exception as e:
+            print("Cloud AI failed:", e)
+
+    # ----------------------------
+    # Offline Model
+    # ----------------------------
     if local_classifier:
+
         prediction = local_classifier(text)[0]
-        label = "REAL NEWS" if prediction["label"] == "LABEL_1" else "FAKE NEWS"
-        confidence = f"{round(prediction['score'] * 100, 2)}%"
-        
+
+        score = round(prediction["score"] * 100, 2)
+
+        if prediction["label"] == "POSITIVE":
+            verdict = "REAL NEWS"
+        else:
+            verdict = "FAKE NEWS"
+
         return {
-            "verdict": label,
-            "confidence": confidence,
-            "reason": "Analyzed locally using fine-tuned DistilBERT transformer.",
-            "engine": "Local DistilBERT (Offline)"
+            "verdict": verdict,
+            "confidence": f"{score}%",
+            "reason": "Prediction generated using the local AI model.",
+            "engine": "Local DistilBERT",
         }
 
-    return {"error": "No AI engine available."}
+    # ----------------------------
+    # No model available
+    # ----------------------------
+    return {
+        "verdict": "UNKNOWN",
+        "confidence": "0%",
+        "reason": "No AI model is available.",
+        "engine": "None",
+    }
