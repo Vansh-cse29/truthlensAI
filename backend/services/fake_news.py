@@ -3,12 +3,23 @@ import json
 import requests
 from transformers import pipeline
 
+# Lightweight fake-news model
+# Fine-tuned DistilBERT model for REAL / FAKE news
+MODEL_NAME = "afsanehm/fake-news-detection-llm"
+
+print("Loading TruthLens AI fake-news model...")
+
 try:
     local_classifier = pipeline(
         "text-classification",
-        model="distilbert-base-uncased-finetuned-sst-2-english"
+        model=MODEL_NAME,
+        truncation=True,
+        max_length=512
     )
-except Exception:
+    print("Fake-news model loaded successfully.")
+
+except Exception as e:
+    print("Model loading failed:", e)
     local_classifier = None
 
 
@@ -18,18 +29,28 @@ def analyze_news_hybrid(
     openai_api_key: str = None
 ) -> dict:
 
+    if not text or not text.strip():
+        return {
+            "verdict": "UNKNOWN",
+            "confidence": "0%",
+            "reason": "Please enter some news text.",
+            "engine": "None"
+        }
+
     api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
 
-    # ----------------------------
-    # Cloud AI (Optional)
-    # ----------------------------
+    # --------------------------------------------------
+    # CLOUD AI - OPTIONAL
+    # --------------------------------------------------
+
     if use_cloud and api_key:
+
         try:
             response = requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
+                    "Content-Type": "application/json"
                 },
                 json={
                     "model": "gpt-4o-mini",
@@ -37,61 +58,93 @@ def analyze_news_hybrid(
                         {
                             "role": "system",
                             "content": (
-                                "You are a fake news detector. "
-                                "Reply ONLY in JSON with keys: "
-                                "verdict, confidence, reason."
-                            ),
+                                "You are a news credibility analyzer. "
+                                "Analyze the provided news text carefully. "
+                                "Return ONLY valid JSON with these keys: "
+                                "verdict, confidence, reason. "
+                                "verdict must be either REAL NEWS or FAKE NEWS. "
+                                "confidence must be a percentage string. "
+                                "reason must briefly explain the decision."
+                            )
                         },
                         {
                             "role": "user",
-                            "content": text,
-                        },
+                            "content": text
+                        }
                     ],
                     "response_format": {
                         "type": "json_object"
-                    },
+                    }
                 },
-                timeout=10,
+                timeout=10
             )
 
             if response.status_code == 200:
+
                 result = json.loads(
                     response.json()["choices"][0]["message"]["content"]
                 )
 
-                result["engine"] = "Cloud AI (GPT-4o)"
+                result["engine"] = "Cloud AI"
+
                 return result
+
+            print("Cloud AI HTTP error:", response.status_code)
 
         except Exception as e:
             print("Cloud AI failed:", e)
 
-    # ----------------------------
-    # Offline Model
-    # ----------------------------
+    # --------------------------------------------------
+    # LOCAL AI
+    # --------------------------------------------------
+
     if local_classifier:
 
-        prediction = local_classifier(text)[0]
+        try:
+            prediction = local_classifier(text)[0]
 
-        score = round(prediction["score"] * 100, 2)
+            label = prediction["label"]
+            score = prediction["score"]
 
-        if prediction["label"] == "POSITIVE":
-            verdict = "REAL NEWS"
-        else:
-            verdict = "FAKE NEWS"
+            # Model mapping:
+            # LABEL_0 = FAKE
+            # LABEL_1 = REAL
 
-        return {
-            "verdict": verdict,
-            "confidence": f"{score}%",
-            "reason": "Prediction generated using the local AI model.",
-            "engine": "Local DistilBERT",
-        }
+            if label == "LABEL_1":
+                verdict = "REAL NEWS"
+            else:
+                verdict = "FAKE NEWS"
 
-    # ----------------------------
-    # No model available
-    # ----------------------------
+            confidence = round(score * 100, 2)
+
+            return {
+                "verdict": verdict,
+                "confidence": f"{confidence}%",
+                "reason": (
+                    "The news content was analyzed using a "
+                    "DistilBERT model fine-tuned for fake-news detection."
+                ),
+                "engine": "Local AI (DistilBERT)"
+            }
+
+        except Exception as e:
+
+            print("Local model prediction failed:", e)
+
+            return {
+                "verdict": "UNKNOWN",
+                "confidence": "0%",
+                "reason": "The AI model could not analyze this content.",
+                "engine": "Local AI"
+            }
+
+    # --------------------------------------------------
+    # NO MODEL
+    # --------------------------------------------------
+
     return {
         "verdict": "UNKNOWN",
         "confidence": "0%",
         "reason": "No AI model is available.",
-        "engine": "None",
+        "engine": "None"
     }
